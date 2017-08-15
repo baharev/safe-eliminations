@@ -1,86 +1,74 @@
-# Copyright (C) 2017 University of Vienna
+# BSD 3-Clause License
+# Copyright (c) 2017, University of Vienna
 # All rights reserved.
-# BSD license.
 # Author: Ali Baharev <ali.baharev@gmail.com>
+# https://github.com/baharev/safe-eliminations
 from __future__ import division, print_function
-from collections import OrderedDict
-import sympy as sp
 import imp
+from sys import stderr
 from six import exec_
-import logging
+from sympy import solve, Symbol
 
+__all__ = ['find_safe_eliminations']
 
-def main(eqs, var, variable_bounds):
+def find_safe_eliminations(eqs, name_to_bounds, symbol_to_key=str):
+    # eqs: iterable of SymPy expression trees, each tree represents the left
+    #     hand side of an equation of form f(x) = 0.
+    # name_to_bounds: either a dict or a function that maps a variable name to 
+    #     the tuple of its lower bound and upper bounds. The variable names must
+    #     be valid Python variable names, and must not clash with names of  
+    #     mathematical functions such as exp or log.
+    # symbol_to_key: a function that maps the SymPy Symbol (atom) of the 
+    #     variables to the corresponding key in the returned dict. By default, 
+    #     the variable names will be used as keys. If you want the indices 
+    #     of the variables as keys, try something along these lines:
+    #     `lambda v: name_to_index[str(v)]` where name_to_index maps a variable
+    #     name to its desired index. 
+    # Returns: The list of dictionaries of the safe eliminations, one dictionary
+    #     per equation, in the order of eqs. The keys of the returned dicts are 
+    #     determined by the symbol_to_key function (the keys will be the 
+    #     variable names by default). The values in the dicts are the SymPy 
+    #     expression trees: the safe eliminations when the equation is solved 
+    #     for the variable corresponding to the key.
+    # Warning: The algorithm is conservative in the sense that it only considers
+    #     an elimination to be safe if it can prove it. If it fails to prove it,
+    #     it considers it as unsafe, even if the elimination is safe in reality.
+    #     The variables are assumed to have sane lower and upper bounds (10^100
+    #     is not a sane variable bound). Although the algorithm tolerates 
+    #     missing bounds, insane bounds, and even +infinity and -infinity as 
+    #     bound, it is more likely that it will consider eliminations involving 
+    #     such variables unsafe.
+    #
+    # See also the example.py.            
+    return [safe_sols(eq, name_to_bounds, symbol_to_key) for eq in eqs]
 
-    n_eqs, n_vars = len(eqs), len(var)
-    logging.debug('The system of equations:')
-    logging.debug('\n'.join(str(eq) for eq in eqs))
-    logging.debug('Size: %d x %d' % (n_eqs, n_vars))
-    solvability_pattern = []
-    for eq in eqs:
-        logging.debug('------------------------------------------------------------')
-        logging.debug('Trying to solve: %s = 0 for each variable\n' % str(eq))
-        variables = [v for v in eq.atoms(sp.Symbol) if not v.is_number]
-        variables = sorted(variables, key=lambda v: var[str(v)])
-        logging.debug('Variables: {}\n'.format(variables))
-
-        var_names = [str(v) for v in variables]
-        var_bounds = [(v, variable_bounds[str(v)]) for v in var_names]
-        solutions = symbolic_sols(eq, variables, var_bounds)
-        row = [' '] * n_vars
-        for v in var_names:
-            row[var[v]] = 'S' if v in solutions else 'U'
-        solvability_pattern.append(row)
-
-    return solvability_pattern, n_vars
-
-
-def pretty_print_solvability_pattern(solvability_pattern, n_vars, variable_bounds, eqs):
-    var_names = list(variable_bounds)
-    logging.debug('============================================================')
-    logging.debug('The equations were (left-hand side = 0, only left-hand side shown):')
-    logging.debug(eqs)
-    logging.debug('Variable bounds:\n')
-    for name, (lb, ub) in variable_bounds.items():
-        logging.debug('{} <= {} <= {}'.format(lb, name, ub))
-
-    logging.debug('\nSolvability pattern')
-    logging.debug('S: solvable')
-    logging.debug('U: unsolvable/unsafe elimination given the variable boundsn\n')
-
-    indent = '   '
-    logging.debug('{}{}'.format(indent, '  '.join(var_names)))
-    logging.debug('{}{}'.format(indent, '-'*(n_vars + 2*(n_vars-1))))
-    for i, row in enumerate(solvability_pattern):
-        logging.debug('{}{}{}'.format(i, ' |', '  '.join(entry for entry in row)))
-
-# -------------------------------------------------------------------------------
-
-
-def symbolic_sols(eq, variables, varname_bnds):
-    # print(eq)
+def safe_sols(eq, name_to_bounds, symbol_to_key=str):
     solutions = {}
+    variables = [v for v in eq.atoms(Symbol) if not v.is_number]
+    names = [str(v) for v in variables]
+    if hasattr(name_to_bounds, '__getitem__'):
+        name_to_bounds = name_to_bounds.__getitem__
+    bounds = [name_to_bounds(name) for name in names]
+    assert all(b is not None for b in bounds) # A variable not in name_to_bounds?
     for v in variables:
-        sol = get_solution(eq, v, varname_bnds)
-        if sol:
-            solutions[str(v)] = sol
+        sol = get_safe_solution(eq, v, names, bounds)
+        if sol is not None:
+            solutions[symbol_to_key(v)] = sol
     return solutions
 
-
-def get_solution(eq, v, varname_bnds):
+def get_safe_solution(eq, v, names, bounds):
     try:
-        sol = sp.solve(eq, v, rational=False)
-    except NotImplementedError as nie:
-        logging.error('{}{}{}'.format('<<<\n', nie, '\n>>>'))
+        sol = solve(eq, v, rational=False)
+    except NotImplementedError:
+        # We treat it as "unsafe" to be on the safe side, altough it might be 
+        # too conservative
         return
     if len(sol) != 1:  # Either no solution or multiple solutions
         return
     # Unique and explicit solution
-    expression = str(sol[0])
-    logging.debug('{}{}{}'.format(v, '=', expression))
-    safe = check_safety(expression, varname_bnds)
-    logging.debug('{}{}\n'.format('Is safe?', safe))
-    return str(v) + ' = ' + expression if safe else None
+    expression = sol[0]
+    safe = is_safe_elimination(expression, names, bounds)
+    return expression if safe else None
 
 eval_code = '''
 try:
@@ -99,51 +87,28 @@ def is_safe():
     return res in iv.mpf([-10**15, 10**15])
 '''
 
-
-def check_safety(expression, varname_bnds):
-    names, ivbounds = [], []
+def is_safe_elimination(expression, names, bounds):
     bound_template = 'iv.mpf(({l}, {u}))'
     NegInf, PosInf = float('-inf'), float('inf')
-    for name, bounds in varname_bnds:
-        names.append(name)
-        lb = str(bounds[0]) if bounds[0] != NegInf else "'-inf'"
-        ub = str(bounds[1]) if bounds[1] != PosInf else "'inf'"
+    ivbounds = []
+    for lb, ub in bounds:
+        lb = str(lb) if lb != NegInf else "'-inf'"
+        ub = str(ub) if ub != PosInf else "'inf'"
         ivbounds.append(bound_template.format(l=lb, u=ub))
+    expression = str(expression)
     expression = expression.replace('exp', 'iv.exp')
     expression = expression.replace('log', 'iv.log')    
     code = eval_code.format(varnames=', '.join(names),
                             varbounds=', '.join(ivbounds),
                             expression=expression)
-    # print(code)
-    m = import_code(code)
-    return m.is_safe()
-
-
-def import_code(code):
     module = imp.new_module('someFakeName')
     try:
         exec_(code, module.__dict__)
+        return module.is_safe()
     except:
-        print(code)
+        warning('Please report this issue on GitHub! The problematic code was:')
+        warning(code)
         raise
-    return module
 
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.DEBUG)
-
-    EQUATIONS = '''
-        x  + y    + z - 2
-             y**2 + z - 3
-    log(x) +      + z - 1.0
-    '''
-
-    VAR_BOUNDS = OrderedDict([('x', (-10.0, 10.0)), ('y', (-4, 4)), ('z', (-6, 6))])
-
-    VAR_ORDER = {name: i for i, name in enumerate(VAR_BOUNDS)}
-
-    EQS = [sp.sympify(line) for line in EQUATIONS.splitlines() if line.strip()]
-
-    solvability_pattern_list, number_of_vars = main(EQS, VAR_ORDER, VAR_BOUNDS)
-
-    pretty_print_solvability_pattern(solvability_pattern_list, number_of_vars, VAR_BOUNDS, EQS)
-    logging.debug('\nDone!')
+def warning(*args):
+    print(*args, file=stderr)
