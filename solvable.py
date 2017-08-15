@@ -1,93 +1,85 @@
-# BSD 3-Clause License
-# Copyright (c) 2017, University of Vienna
+# Copyright (C) 2017 University of Vienna
 # All rights reserved.
+# BSD license.
 # Author: Ali Baharev <ali.baharev@gmail.com>
-# https://github.com/baharev/safe-eliminations
 from __future__ import division, print_function
 from collections import OrderedDict
 import sympy as sp
 import imp
-from six import exec_ 
+from six import exec_
+import logging
 
-EQUATIONS = '''
-    x  + y    + z - 2
-         y**2 + z - 3
-log(x) +      + z - 1.0
-'''
 
-VAR_BOUNDS = OrderedDict([('x', (-10.0, 10.0)), ('y', (-4, 4)), ('z', (-6, 6))])
+def main(eqs, var, variable_bounds):
 
-VAR_ORDER = {name: i for i, name in enumerate(VAR_BOUNDS)}
-
-def main():
-    eqs = [sp.sympify(line) for line in EQUATIONS.splitlines() if line.strip()]
-    n_eqs, n_vars = len(eqs), len(VAR_ORDER)
-    print('The system of equations:')
-    print('\n'.join(str(eq) for eq in eqs))
-    print('Size: %d x %d' % (n_eqs, n_vars))
+    n_eqs, n_vars = len(eqs), len(var)
+    logging.debug('The system of equations:')
+    logging.debug('\n'.join(str(eq) for eq in eqs))
+    logging.debug('Size: %d x %d' % (n_eqs, n_vars))
     solvability_pattern = []
     for eq in eqs:
-        print('------------------------------------------------------------')
-        print('Trying to solve: %s = 0 for each variable\n' % str(eq))
+        logging.debug('------------------------------------------------------------')
+        logging.debug('Trying to solve: %s = 0 for each variable\n' % str(eq))
         variables = [v for v in eq.atoms(sp.Symbol) if not v.is_number]
-        variables = sorted(variables, key=lambda v: VAR_ORDER[str(v)])
-        print('Variables:', variables)
-        print()
+        variables = sorted(variables, key=lambda v: var[str(v)])
+        logging.debug('Variables: {}\n'.format(variables))
+
         var_names = [str(v) for v in variables]
-        var_bounds = [(v, VAR_BOUNDS[str(v)]) for v in var_names]
+        var_bounds = [(v, variable_bounds[str(v)]) for v in var_names]
         solutions = symbolic_sols(eq, variables, var_bounds)
         row = [' '] * n_vars
         for v in var_names:
-            row[VAR_ORDER[v]] = 'S' if v in solutions else 'U'
+            row[var[v]] = 'S' if v in solutions else 'U'
         solvability_pattern.append(row)
-    pretty_print_solvability_pattern(solvability_pattern, n_vars)
-    print('Done!')
 
-def pretty_print_solvability_pattern(solvability_pattern, n_vars):
-    var_names = list(VAR_BOUNDS)
-    print('============================================================')
-    print('The equations were (left-hand side = 0, only left-hand side shown):')
-    print(EQUATIONS)
-    print('Variable bounds:\n')
-    for name, (lb, ub) in VAR_BOUNDS.items():
-        print('{} <= {} <= {}'.format(lb, name, ub))
-    print()
-    print('Solvability pattern')
-    print('S: solvable')
-    print('U: unsolvable/unsafe elimination given the variable bounds')
-    print()
-    indent = '  '
-    print(indent, '  '.join(var_names))
-    print(indent, '-'*(n_vars + 2*(n_vars-1)))
+    return solvability_pattern, n_vars
+
+
+def pretty_print_solvability_pattern(solvability_pattern, n_vars, variable_bounds, eqs):
+    var_names = list(variable_bounds)
+    logging.debug('============================================================')
+    logging.debug('The equations were (left-hand side = 0, only left-hand side shown):')
+    logging.debug(eqs)
+    logging.debug('Variable bounds:\n')
+    for name, (lb, ub) in variable_bounds.items():
+        logging.debug('{} <= {} <= {}'.format(lb, name, ub))
+
+    logging.debug('\nSolvability pattern')
+    logging.debug('S: solvable')
+    logging.debug('U: unsolvable/unsafe elimination given the variable boundsn\n')
+
+    indent = '   '
+    logging.debug('{}{}'.format(indent, '  '.join(var_names)))
+    logging.debug('{}{}'.format(indent, '-'*(n_vars + 2*(n_vars-1))))
     for i, row in enumerate(solvability_pattern):
-        print(i, ' |','  '.join(entry for entry in row), sep='')
-    print()
+        logging.debug('{}{}{}'.format(i, ' |', '  '.join(entry for entry in row)))
 
-#-------------------------------------------------------------------------------
+# -------------------------------------------------------------------------------
+
 
 def symbolic_sols(eq, variables, varname_bnds):
-    #print(eq)
-    solutions = { } 
+    # print(eq)
+    solutions = {}
     for v in variables:
         sol = get_solution(eq, v, varname_bnds)
         if sol:
             solutions[str(v)] = sol
     return solutions
 
+
 def get_solution(eq, v, varname_bnds):
     try:
         sol = sp.solve(eq, v, rational=False)
     except NotImplementedError as nie:
-        print('<<<\n', nie, '\n>>>', sep='')
+        logging.error('{}{}{}'.format('<<<\n', nie, '\n>>>'))
         return
-    if len(sol) != 1: # Either no solution or multiple solutions
+    if len(sol) != 1:  # Either no solution or multiple solutions
         return
     # Unique and explicit solution
     expression = str(sol[0])
-    print(v, '=', expression)
+    logging.debug('{}{}{}'.format(v, '=', expression))
     safe = check_safety(expression, varname_bnds)
-    print('Is safe?', safe)
-    print()
+    logging.debug('{}{}\n'.format('Is safe?', safe))
     return str(v) + ' = ' + expression if safe else None
 
 eval_code = '''
@@ -107,8 +99,9 @@ def is_safe():
     return res in iv.mpf([-10**15, 10**15])
 '''
 
+
 def check_safety(expression, varname_bnds):
-    names, ivbounds = [ ], [ ]
+    names, ivbounds = [], []
     bound_template = 'iv.mpf(({l}, {u}))'
     NegInf, PosInf = float('-inf'), float('inf')
     for name, bounds in varname_bnds:
@@ -118,12 +111,13 @@ def check_safety(expression, varname_bnds):
         ivbounds.append(bound_template.format(l=lb, u=ub))
     expression = expression.replace('exp', 'iv.exp')
     expression = expression.replace('log', 'iv.log')    
-    code = eval_code.format(varnames   = ', '.join(names),
-                            varbounds  = ', '.join(ivbounds),
-                            expression = expression)
-    #print(code)
+    code = eval_code.format(varnames=', '.join(names),
+                            varbounds=', '.join(ivbounds),
+                            expression=expression)
+    # print(code)
     m = import_code(code)
     return m.is_safe()
+
 
 def import_code(code):
     module = imp.new_module('someFakeName')
@@ -135,4 +129,21 @@ def import_code(code):
     return module
 
 if __name__ == '__main__':
-    main()
+    logging.basicConfig(level=logging.DEBUG)
+
+    EQUATIONS = '''
+        x  + y    + z - 2
+             y**2 + z - 3
+    log(x) +      + z - 1.0
+    '''
+
+    VAR_BOUNDS = OrderedDict([('x', (-10.0, 10.0)), ('y', (-4, 4)), ('z', (-6, 6))])
+
+    VAR_ORDER = {name: i for i, name in enumerate(VAR_BOUNDS)}
+
+    EQS = [sp.sympify(line) for line in EQUATIONS.splitlines() if line.strip()]
+
+    solvability_pattern_list, number_of_vars = main(EQS, VAR_ORDER, VAR_BOUNDS)
+
+    pretty_print_solvability_pattern(solvability_pattern_list, number_of_vars, VAR_BOUNDS, EQS)
+    logging.debug('\nDone!')
