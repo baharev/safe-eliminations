@@ -2,7 +2,7 @@
 
 The background is discussed in *2. Identifying feasible assignments* of
 
-[Ordering matrices to bordered lower triangular form with minimal border width](http://reliablecomputing.eu/baharev_tearing_exact_algorithm.pdf).
+[Ordering matrices to bordered lower triangular form with minimal border width](https://baharev.info/publications/baharev_tearing_exact_algorithm.pdf).
 
 The code here is derived from:
 
@@ -16,7 +16,7 @@ The `solvable.py` is only concerned with expression trees coming from, and
 going to [SymPy](http://docs.sympy.org/latest/tutorial/manipulation.html).  
 **The caveats mentioned in the last two paragraphs of 
 *2.2. Identifying numerically troublesome assignments* in 
-[Ordering matrices to bordered lower triangular form with minimal border width](http://reliablecomputing.eu/baharev_tearing_exact_algorithm.pdf) 
+[Ordering matrices to bordered lower triangular form with minimal border width](https://baharev.info/publications/baharev_tearing_exact_algorithm.pdf) 
 do apply!**
 
 Of course, the long-term goal is to merge the code back into 
